@@ -1,70 +1,64 @@
 package main
 
 import (
-	"bytes"
 	"flag"
 	"image"
-	"image/png"
-	"io"
+	"image/color"
 	"log"
-	"os"
+	"runtime"
 
-	"github.com/eternnoir/gotelebot"
-	"golang.org/x/image/webp"
+	"github.com/go-telegram-bot-api/telegram-bot-api"
 )
+
+func init() {
+	whitePage := image.NewRGBA(image.Rect(0, 0, 512, 512))
+	for x := 0; x < 512; x++ {
+		for y := 0; y < 512; y++ {
+			whitePage.Set(x, y, color.RGBA{R: 255, G: 255, B: 255, A: 255})
+		}
+	}
+	BackGroundImage = whitePage
+}
 
 func main() {
 	Token := flag.String("token", "", "Telegram Bot API token")
-	bot := gotelebot.InitTeleBot(*Token)
-	go func(b *gotelebot.TeleBot) {
-		err := b.StartPolling(true, 120)
-		if err != nil {
-			log.Fatalln(err)
+	debug := flag.Bool("debug", false, "show debug information")
+	flag.Parse()
+	if *Token == "" {
+		log.Fatal("Token flag required!")
+	}
+	bot, err := tgbotapi.NewBotAPI(*Token)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	bot.Debug = *debug
+	runtime.GOMAXPROCS(runtime.NumCPU())
+	log.Printf("Running on %d CPU\n", runtime.NumCPU())
+	log.Printf("Authorized on account %q\n", bot.Self.UserName)
+	u := tgbotapi.NewUpdate(0)
+	u.Timeout = 3600
+
+	updates, err := bot.GetUpdatesChan(u)
+	if err != nil {
+		log.Fatalf("error while getting update chan: %v\n", err)
+	}
+	for update := range updates {
+		if update.Message == nil {
+			continue
 		}
-	}(bot)
-	var err error
-	var data *[]byte
-	var img image.Image
-	var file *os.File
-	buf := &bytes.Buffer{}
-	for message := range bot.Messages {
-		if message.Sticker != nil {
-			log.Printf("@%s -> %s\n", message.From.Username, message.Sticker.FileId)
-			data, err = bot.DownloadFile(message.Sticker.FileId)
-			if err != nil {
-				log.Printf("error while downloading sticker: %v\n", err)
-				continue
-			}
-			img, err = webp.Decode(bytes.NewReader(*data))
-			if err != nil {
-				log.Printf("error while decoding sticker: %v\n", err)
-				continue
-			}
-			buf.Reset()
-			err = png.Encode(buf, img)
-			if err != nil {
-				log.Printf("error while encoding png image: %v\n", err)
-				continue
-			}
-			file, err = os.Create(message.Sticker.FileId + ".png")
-			if err != nil {
-				log.Printf("error while creating file %q: %v\n", message.Sticker.FileId+".png", err)
-				continue
-			}
-			_, err = io.Copy(file, bytes.NewReader(buf.Bytes()))
-			if err != nil {
-				log.Printf("error while writing file %q: %v\n", message.Sticker.FileId+".png", err)
-				continue
-			}
-			file.Close()
-			bot.SendDocument(int(message.Chat.Id), "")
-			/*
-				            _, err = bot.SendDocument(int(message.Chat.Id), buf.String(), nil)
-							if err != nil {
-								log.Printf("error while uploading png image: %v\n", err)
-								continue
-							}
-			*/
+		if update.Message.Sticker != nil {
+			log.Printf("@%s: %s\n", update.Message.From.UserName, update.Message.Sticker.Emoji)
+			go ProcessSticker(bot, *update.Message)
+		}
+		if update.Message.Command() == "start" {
+			go func() {
+				repl := tgbotapi.NewMessage(update.Message.Chat.ID, "Hi!\nSend me a sticker and I'll return you a photo and a PNG image!")
+				repl.ReplyToMessageID = update.Message.MessageID
+				_, err := bot.Send(repl)
+				if err != nil {
+					log.Printf("error while sending 'hello' message: %v\n", err)
+				}
+			}()
 		}
 	}
 }
