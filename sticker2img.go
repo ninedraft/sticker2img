@@ -46,10 +46,12 @@ func main() {
 		if update.Message == nil || !update.Message.Chat.IsPrivate() {
 			continue
 		}
+
 		if update.Message.Sticker != nil {
 			log.Printf("@%s: %s\n", update.Message.From.UserName, update.Message.Sticker.Emoji)
 			go ProcessSticker(bot, *update.Message)
 		}
+
 		if update.Message.Command() == "start" {
 			go func() {
 				repl := tgbotapi.NewMessage(update.Message.Chat.ID, "Hi!\nSend me a sticker and I'll return you a photo and a PNG image!")
