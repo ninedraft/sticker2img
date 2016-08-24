@@ -43,7 +43,7 @@ func main() {
 		log.Fatalf("error while getting update chan: %v\n", err)
 	}
 	for update := range updates {
-		if update.Message == nil {
+		if update.Message == nil || !update.Message.Chat.IsPrivate() {
 			continue
 		}
 		if update.Message.Sticker != nil {
