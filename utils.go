@@ -15,24 +15,20 @@ import (
 	"golang.org/x/image/webp"
 )
 
-var (
-	BackGroundImage image.Image
-)
-
 func DownloadFile(bot *tgbotapi.BotAPI, fileid string) (*bytes.Buffer, error) {
 	client := http.Client{
 		Timeout: 60 * time.Second,
 	}
 	link, err := bot.GetFileDirectURL(fileid)
 	if err != nil {
-		return nil, fmt.Errorf("error while getting sticker download link: %v\n", err)
+		return nil, err
 	}
 	resp, err := client.Get(link)
 	if err != nil {
-		return nil, fmt.Errorf("error while downloading sticker: %v\n", err)
+		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("error while downloading sticker: %s\n", resp.Status)
+		return nil, fmt.Errorf("%s", resp.Status)
 	}
 	buf := &bytes.Buffer{}
 	_, err = buf.ReadFrom(resp.Body)
@@ -70,10 +66,9 @@ func ProcessSticker(bot *tgbotapi.BotAPI, message tgbotapi.Message) {
 		log.Printf("error while sending image: %v\n", err)
 	}
 
-	time.Sleep(time.Second)
-
-	photoBuf := &bytes.Buffer{}
-	photo := bild.Normal(bild.Crop(BackGroundImage, image.Rect(0, 0, message.Sticker.Width, message.Sticker.Height)), img)
+	imgBuf.Reset()
+	photoBuf := buf
+	photo := bild.NormalBlend(bild.Crop(image.White, image.Rect(0, 0, message.Sticker.Width, message.Sticker.Height)), img)
 	err = jpeg.Encode(photoBuf, photo, nil)
 	if err != nil {
 		log.Printf("error while encoding jpeg image: %v\n", err)

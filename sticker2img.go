@@ -2,23 +2,11 @@ package main
 
 import (
 	"flag"
-	"image"
-	"image/color"
 	"log"
 	"runtime"
 
 	"github.com/go-telegram-bot-api/telegram-bot-api"
 )
-
-func init() {
-	whitePage := image.NewRGBA(image.Rect(0, 0, 512, 512))
-	for x := 0; x < 512; x++ {
-		for y := 0; y < 512; y++ {
-			whitePage.Set(x, y, color.RGBA{R: 255, G: 255, B: 255, A: 255})
-		}
-	}
-	BackGroundImage = whitePage
-}
 
 func main() {
 	Token := flag.String("token", "", "Telegram Bot API token")
