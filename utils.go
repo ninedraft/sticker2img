@@ -39,6 +39,14 @@ func DownloadFile(bot *tgbotapi.BotAPI, fileid string) (*bytes.Buffer, error) {
 }
 
 func ProcessSticker(bot *tgbotapi.BotAPI, message tgbotapi.Message) {
+
+	defer func() {
+		err := recover()
+		if err != nil {
+			log.Printf("panic: %v\n", err)
+		}
+	}()
+
 	buf, err := DownloadFile(bot, message.Sticker.FileID)
 	if err != nil {
 		log.Printf("error while downloading sticker: %v\n", err)
@@ -68,7 +76,7 @@ func ProcessSticker(bot *tgbotapi.BotAPI, message tgbotapi.Message) {
 
 	imgBuf.Reset()
 	photoBuf := buf
-	photo := bild.NormalBlend(bild.Crop(image.White, image.Rect(0, 0, message.Sticker.Width, message.Sticker.Height)), img)
+	photo := bild.NormalBlend(bild.Crop(WhiteImg, image.Rect(0, 0, message.Sticker.Width, message.Sticker.Height)), img)
 	err = jpeg.Encode(photoBuf, photo, nil)
 	if err != nil {
 		log.Printf("error while encoding jpeg image: %v\n", err)
@@ -80,6 +88,23 @@ func ProcessSticker(bot *tgbotapi.BotAPI, message tgbotapi.Message) {
 			Bytes: photoBuf.Bytes(),
 		}))
 	if err != nil {
-		log.Printf("error while sending image: %v\n", err)
+		log.Printf("error while sending jpeg image: %v\n", err)
 	}
+
+	buf.Reset()
+	minPhotoBuf := buf
+	err = jpeg.Encode(minPhotoBuf, bild.Resize(photo, message.Sticker.Width*3/7, message.Sticker.Height*3/7, bild.Linear), nil)
+	if err != nil {
+		log.Printf("error while encoding mini jpeg image: %v\n", err)
+		return
+	}
+	_, err = bot.Send(tgbotapi.NewPhotoUpload(message.Chat.ID,
+		tgbotapi.FileBytes{
+			Name:  message.Sticker.Emoji + ".jpeg",
+			Bytes: minPhotoBuf.Bytes(),
+		}))
+	if err != nil {
+		log.Printf("error while sending mini jpeg image: %v\n", err)
+	}
+
 }
