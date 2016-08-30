@@ -50,7 +50,7 @@ func main() {
 		}
 
 		if update.Message.Sticker != nil {
-			log.Printf("@%s: %s\n", update.Message.From.UserName, update.Message.Sticker.Emoji)
+			log.Printf("@%s: %q\n", update.Message.From.UserName, update.Message.Sticker.Emoji)
 			go ProcessSticker(bot, *update.Message)
 		}
 
