@@ -2,20 +2,31 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
 	"image/png"
+	"io"
 	"log"
+	"maps"
 	"net/http"
+	"slices"
+	"strings"
 	"time"
 
-	"github.com/anthonynsimon/bild"
-	"github.com/go-telegram-bot-api/telegram-bot-api"
+	tgbotapi "github.com/OvyFlash/telegram-bot-api"
+	"github.com/anthonynsimon/bild/blend"
+	"github.com/anthonynsimon/bild/transform"
 	"golang.org/x/image/webp"
 )
 
-func DownloadFile(bot *tgbotapi.BotAPI, fileid string) (*bytes.Buffer, error) {
+const maxSize = 1024 * 1024
+
+var errTooBig = errors.New("file is too big")
+
+func DownloadFile(bot *tgbotapi.BotAPI, fileid string) ([]byte, error) {
 	client := http.Client{
 		Timeout: 60 * time.Second,
 	}
@@ -27,19 +38,27 @@ func DownloadFile(bot *tgbotapi.BotAPI, fileid string) (*bytes.Buffer, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s", resp.Status)
 	}
-	buf := &bytes.Buffer{}
-	_, err = buf.ReadFrom(resp.Body)
-	if err != nil {
-		return nil, err
+
+	re := &io.LimitedReader{
+		R: resp.Body,
+		N: maxSize + 1,
 	}
-	return buf, resp.Body.Close()
+
+	body, err := io.ReadAll(re)
+
+	if re.N == 0 {
+		return nil, errTooBig
+	}
+
+	return body, err
 }
 
 func ProcessSticker(bot *tgbotapi.BotAPI, message tgbotapi.Message) {
-
 	defer func() {
 		err := recover()
 		if err != nil {
@@ -47,64 +66,104 @@ func ProcessSticker(bot *tgbotapi.BotAPI, message tgbotapi.Message) {
 		}
 	}()
 
-	buf, err := DownloadFile(bot, message.Sticker.FileID)
+	body, err := DownloadFile(bot, message.Sticker.FileID)
 	if err != nil {
 		log.Printf("error while downloading sticker: %v\n", err)
 		return
 	}
-	img, err := webp.Decode(buf)
+	img, err := webp.Decode(bytes.NewReader(body))
+
+	if errors.Is(err, errTooBig) {
+		log.Printf("error while decoding sticker: %v\n", err)
+
+		_, _ = bot.Send(tgbotapi.NewMessage(message.Chat.ID, err.Error()))
+		return
+	}
+
 	if err != nil {
 		log.Printf("error while decoding sticker: %v\n", err)
-		return
-	}
-	buf.Reset()
-	imgBuf := buf
-	err = png.Encode(imgBuf, img)
-	if err != nil {
-		log.Printf("error while encoding png image: %v\n", err)
+
+		_, _ = bot.Send(tgbotapi.NewMessage(message.Chat.ID, "unsuppored file format "+http.DetectContentType(body)))
 		return
 	}
 
-	_, err = bot.Send(tgbotapi.NewDocumentUpload(message.Chat.ID,
-		tgbotapi.FileBytes{
-			Name:  message.Sticker.Emoji + ".png",
-			Bytes: imgBuf.Bytes(),
-		}))
-	if err != nil {
-		log.Printf("error while sending image: %v\n", err)
+	filename := fmt.Sprintf("%s_%s", message.Sticker.Emoji, strings.ToLower(rand.Text()))
+
+	{
+		imgBuf := &bytes.Buffer{}
+		err = png.Encode(imgBuf, img)
+		if err != nil {
+			log.Printf("error while encoding png image: %v\n", err)
+			return
+		}
+
+		document := tgbotapi.NewDocument(message.Chat.ID,
+			tgbotapi.FileBytes{
+				Name:  filename + ".png",
+				Bytes: imgBuf.Bytes(),
+			})
+
+		document.ReplyParameters.ChatID = message.Chat.ID
+		document.ReplyParameters.MessageID = message.MessageID
+
+		_, err = bot.Send(document)
+		if err != nil {
+			log.Printf("error while sending image: %v\n", err)
+		}
 	}
 
-	imgBuf.Reset()
-	photoBuf := buf
-	photo := bild.NormalBlend(bild.Crop(WhiteImg, image.Rect(0, 0, message.Sticker.Width, message.Sticker.Height)), img)
-	err = jpeg.Encode(photoBuf, photo, nil)
+	imgs := map[string][]byte{}
+	photo := blend.Normal(transform.Crop(whiteImg, image.Rect(0, 0, message.Sticker.Width, message.Sticker.Height)), img)
+
+	func() {
+		buf := &bytes.Buffer{}
+		err = jpeg.Encode(buf, photo, jpegOpts)
+		if err != nil {
+			log.Printf("error while encoding jpeg image: %v\n", err)
+			return
+		}
+
+		imgs[filename+".jpg"] = buf.Bytes()
+	}()
+
+	func() {
+		buf := &bytes.Buffer{}
+		photo := transform.Resize(photo, message.Sticker.Width*3/7, message.Sticker.Height*3/7, transform.Linear)
+		err = jpeg.Encode(buf, photo, jpegOpts)
+		if err != nil {
+			log.Printf("error while encoding jpeg image: %v\n", err)
+			return
+		}
+
+		imgs[filename+"_small.jpg"] = buf.Bytes()
+	}()
+
+	_, err = bot.SendMediaGroup(composeAlbum(message.Chat.ID, message.MessageID, imgs))
 	if err != nil {
-		log.Printf("error while encoding jpeg image: %v\n", err)
-		return
+		log.Print("sending photos", "error", err)
 	}
-	_, err = bot.Send(tgbotapi.NewPhotoUpload(message.Chat.ID,
-		tgbotapi.FileBytes{
-			Name:  message.Sticker.Emoji + ".jpeg",
-			Bytes: photoBuf.Bytes(),
-		}))
-	if err != nil {
-		log.Printf("error while sending jpeg image: %v\n", err)
+}
+
+var jpegOpts = &jpeg.Options{
+	Quality: 100,
+}
+
+func composeAlbum(chatID int64, msgID int, imgs map[string][]byte) tgbotapi.MediaGroupConfig {
+	files := make([]tgbotapi.InputMedia, 0, len(imgs))
+	filenames := slices.Sorted(maps.Keys(imgs))
+
+	for _, filename := range filenames {
+		file := imgs[filename]
+
+		photo := tgbotapi.NewInputMediaPhoto(tgbotapi.FileBytes{
+			Name:  filename,
+			Bytes: file,
+		})
+		photo.Caption = filename
+		files = append(files, &photo)
 	}
 
-	buf.Reset()
-	minPhotoBuf := buf
-	err = jpeg.Encode(minPhotoBuf, bild.Resize(photo, message.Sticker.Width*3/7, message.Sticker.Height*3/7, bild.Linear), nil)
-	if err != nil {
-		log.Printf("error while encoding mini jpeg image: %v\n", err)
-		return
-	}
-	_, err = bot.Send(tgbotapi.NewPhotoUpload(message.Chat.ID,
-		tgbotapi.FileBytes{
-			Name:  message.Sticker.Emoji + ".jpeg",
-			Bytes: minPhotoBuf.Bytes(),
-		}))
-	if err != nil {
-		log.Printf("error while sending mini jpeg image: %v\n", err)
-	}
-
+	album := tgbotapi.NewMediaGroup(chatID, files)
+	album.ReplyParameters.MessageID = msgID
+	return album
 }
